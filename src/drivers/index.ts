@@ -1,6 +1,6 @@
 import type { CommsDriver } from './interface.js';
 
-export type DriverName = 'telegram' | 'slack' | 'discord';
+export type DriverName = 'telegram' | 'discord';
 
 export async function loadDriver(name: DriverName): Promise<CommsDriver> {
   switch (name) {
@@ -8,8 +8,6 @@ export async function loadDriver(name: DriverName): Promise<CommsDriver> {
       const { TelegramDriver } = await import('./telegram/index.js');
       return new TelegramDriver();
     }
-    case 'slack':
-      throw new Error('Slack driver not yet implemented');
     case 'discord':
       throw new Error('Discord driver not yet implemented');
     default:
