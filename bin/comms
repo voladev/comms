@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# comms — Gas Town communications CLI
+# Usage:
+#   comms serve              start the bot/driver
+#   comms send [--user <n>] "msg"   send a message
+#   comms inbox [--clear]    read pending messages
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CMD="${1:-help}"
+shift || true
+
+case "$CMD" in
+  serve)   exec tsx "$SCRIPT_DIR/../src/cli/serve.ts"   "$@" ;;
+  send)    exec tsx "$SCRIPT_DIR/../src/cli/send.ts"    "$@" ;;
+  inbox)   exec tsx "$SCRIPT_DIR/../src/cli/inbox.ts"   "$@" ;;
+  help|--help|-h)
+    echo "Usage: comms <command>"
+    echo ""
+    echo "Commands:"
+    echo "  serve              Start the messaging bot/driver"
+    echo "  send [--user <n>] \"msg\"   Send a message"
+    echo "  inbox [--clear]    Read pending incoming messages"
+    ;;
+  *)
+    echo "Unknown command: $CMD" >&2
+    exit 1
+    ;;
+esac
