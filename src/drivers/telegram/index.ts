@@ -191,6 +191,17 @@ export class TelegramDriver implements CommsDriver {
       await replyText(ctx, '✉️ Sent to mayor. Reply will appear here.');
     });
 
+    await bot.telegram.setMyCommands([
+      { command: 'status', description: 'Current town status (gt status)' },
+      { command: 'progress', description: 'Active task progress — what polecats are working on' },
+      { command: 'convoys', description: 'List all active polecats' },
+      { command: 'polecats', description: 'List polecats for a rig (e.g. /polecats pick)' },
+      { command: 'rigs', description: 'List all rigs' },
+      { command: 'mail', description: 'Mayor inbox' },
+      { command: 'ready', description: 'Beads ready to work on' },
+      { command: 'help', description: 'Show all commands' },
+    ]);
+
     bot.launch({ dropPendingUpdates: true });
 
     console.log('🚂 Gas Town comms (telegram) running...');
