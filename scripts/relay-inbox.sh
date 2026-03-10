@@ -53,3 +53,6 @@ Reply: comms send --user $from \"your reply here\""
 done < "$TMP"
 
 rm -f "$TMP"
+
+# Always update progress cache so /progress is fresh
+"$COMMS_DIR/scripts/update-progress.sh" 2>/dev/null || true
