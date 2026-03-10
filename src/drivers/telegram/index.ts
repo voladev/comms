@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { Telegraf, Context } from 'telegraf';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { drainOutbox, appendInbox, readProgressCache } from '../../store.js';
 import type { CommsDriver } from '../interface.js';
@@ -48,6 +48,19 @@ async function run(cmd: string): Promise<string> {
     const e = err as { stdout?: string; stderr?: string; message?: string };
     return (e.stderr || e.stdout || e.message || String(err)).trim();
   }
+}
+
+/** Run a shell command with the given string piped to its stdin. */
+async function runWithStdin(cmd: string, input: string): Promise<void> {
+  return new Promise((resolve) => {
+    const child = spawn('sh', ['-c', cmd], {
+      env: { ...process.env, HOME: process.env.HOME ?? '/root' },
+      stdio: ['pipe', 'ignore', 'ignore'],
+    });
+    child.stdin.end(input);
+    child.on('close', () => resolve());
+    child.on('error', () => resolve());
+  });
 }
 
 function truncate(text: string, max = 3800): string {
@@ -187,6 +200,9 @@ export class TelegramDriver implements CommsDriver {
         time: new Date().toISOString(),
       });
 
+      // Send durable mail to mayor (persisted to inbox, survives session restarts)
+      const mailBody = `📱 Telegram message\n\nFrom: ${name} (id: ${userId})\n\n${text}\n\n---\nReply: comms send --user ${name} "your reply here"`;
+      runWithStdin(`gt mail send mayor/ --subject "COMMS: ${name.replace(/"/g, '')}: ${text.slice(0, 60).replace(/"/g, '')}" --type task --priority 1 --stdin`, mailBody).catch(() => {});
       run(`gt nudge mayor/ "📱 New message from ${name}: ${text.slice(0, 40)}"`).catch(() => {});
       await replyText(ctx, '✉️ Sent to mayor. Reply will appear here.');
     });
