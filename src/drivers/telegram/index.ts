@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { Telegraf, Context } from 'telegraf';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { drainOutbox, appendInbox, readProgressCache } from '../../store.js';
+import { drainOutbox, appendInbox } from '../../store.js';
 import type { CommsDriver } from '../interface.js';
 
 const execAsync = promisify(exec);
@@ -93,12 +93,87 @@ async function pollOutbox(bot: Telegraf): Promise<void> {
   }
 }
 
+// ── Progress ──────────────────────────────────────────────────────────────────
+
+interface PolecatJson {
+  rig: string;
+  name: string;
+  state: string;
+  issue?: string;
+  zombie?: boolean;
+}
+
+interface BdIssue {
+  id: string;
+  title: string;
+  priority: number;
+}
+
+async function fetchIssueTitle(id: string): Promise<string | null> {
+  try {
+    const out = await run(`bd show ${id} --json 2>/dev/null`);
+    const arr = JSON.parse(out) as BdIssue[];
+    return arr[0]?.title ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildProgressReport(): Promise<string> {
+  const lines: string[] = [];
+
+  // ── Active workers ──
+  let polecats: PolecatJson[] = [];
+  try {
+    const raw = await run('gt polecat list --all --json 2>/dev/null');
+    const parsed = JSON.parse(raw);
+    polecats = (Array.isArray(parsed) ? parsed : []).filter((p: PolecatJson) => !p.zombie);
+  } catch { /* ignore */ }
+
+  if (polecats.length > 0) {
+    lines.push('🐱 Active workers:');
+    for (const p of polecats) {
+      let label = p.state;
+      if (p.issue) {
+        const title = await fetchIssueTitle(p.issue);
+        label = title ? `${p.issue}: ${title}` : p.issue;
+      }
+      lines.push(`  ● ${p.rig}/${p.name} — ${label}`);
+    }
+  } else {
+    lines.push('🐱 No active workers');
+  }
+
+  // ── Queued (ready) issues ──
+  let ready: BdIssue[] = [];
+  try {
+    const raw = await run('bd ready --json 2>/dev/null');
+    const parsed = JSON.parse(raw);
+    ready = Array.isArray(parsed) ? parsed : (parsed.issues ?? []);
+  } catch { /* ignore */ }
+
+  lines.push('');
+  if (ready.length > 0) {
+    lines.push('📋 Queued:');
+    for (const issue of ready.slice(0, 8)) {
+      lines.push(`  ○ ${issue.id} P${issue.priority} — ${issue.title}`);
+    }
+    if (ready.length > 8) lines.push(`  … and ${ready.length - 8} more`);
+  } else {
+    lines.push('📋 No queued work');
+  }
+
+  lines.push('');
+  lines.push(`_Updated: ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC_`);
+  return lines.join('\n');
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 const HELP_TEXT =
   'Gas Town commands:\n' +
   '/status — gt status\n' +
-  '/progress — cached task progress snapshot\n' +
+  '/progress — active workers + queued tasks\n' +
   '/convoys — active polecats\n' +
   '/polecats [rig] — gt polecat list\n' +
   '/rigs — gt rig list\n' +
@@ -127,7 +202,7 @@ export class TelegramDriver implements CommsDriver {
         '👋 Gas Town bot online.\n\n' +
           'Commands:\n' +
           '/status — town status\n' +
-          '/progress — active task progress (cached)\n' +
+          '/progress — active workers + queued tasks (live)\n' +
           '/convoys — active polecats\n' +
           '/polecats [rig] — list polecats\n' +
           '/rigs — list rigs\n' +
@@ -177,12 +252,7 @@ export class TelegramDriver implements CommsDriver {
 
     bot.command('progress', async (ctx) => {
       if (!guard(ctx)) return;
-      const cache = readProgressCache();
-      if (cache) {
-        await replyText(ctx, `${cache.text}\n\n_Last updated: ${cache.updated_at}_`);
-      } else {
-        await replyCode(ctx, await run('gt polecat list --all 2>&1'));
-      }
+      await replyText(ctx, await buildProgressReport());
     });
 
     bot.on('text', async (ctx) => {
@@ -209,7 +279,7 @@ export class TelegramDriver implements CommsDriver {
 
     await bot.telegram.setMyCommands([
       { command: 'status', description: 'Current town status (gt status)' },
-      { command: 'progress', description: 'Active task progress — what polecats are working on' },
+      { command: 'progress', description: 'Active workers + queued tasks (live)' },
       { command: 'convoys', description: 'List all active polecats' },
       { command: 'polecats', description: 'List polecats for a rig (e.g. /polecats pick)' },
       { command: 'rigs', description: 'List all rigs' },
