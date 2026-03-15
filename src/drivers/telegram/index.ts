@@ -203,7 +203,7 @@ export class TelegramDriver implements CommsDriver {
       // Send durable mail to mayor (persisted to inbox, survives session restarts)
       const mailBody = `📱 Telegram message\n\nFrom: ${name} (id: ${userId})\n\n${text}\n\n---\nReply: comms send --user ${name} "your reply here"`;
       runWithStdin(`gt mail send mayor/ --subject "COMMS: ${name.replace(/"/g, '')}: ${text.slice(0, 60).replace(/"/g, '')}" --type task --priority 1 --stdin`, mailBody).catch(() => {});
-      run(`gt nudge mayor/ "📱 New message from ${name}: ${text.slice(0, 40)}"`).catch(() => {});
+      run(`gt nudge --mode=immediate mayor/ "📱 New message from ${name}: ${text.slice(0, 40)}"`).catch(() => {});
       await replyText(ctx, '✉️ Sent to mayor. Reply will appear here.');
     });
 
