@@ -37,9 +37,13 @@ function guard(ctx: Context): boolean {
   return true;
 }
 
-async function run(cmd: string): Promise<string> {
+// Town root — needed so bd commands find the routing config and cross-rig databases.
+const TOWN_ROOT = process.env.GT_TOWN_ROOT ?? '/gt';
+
+async function run(cmd: string, cwd?: string): Promise<string> {
   try {
     const { stdout, stderr } = await execAsync(cmd, {
+      cwd: cwd ?? TOWN_ROOT,
       env: { ...process.env, HOME: process.env.HOME ?? '/root' },
       timeout: 30_000,
     });
@@ -54,6 +58,7 @@ async function run(cmd: string): Promise<string> {
 async function runWithStdin(cmd: string, input: string): Promise<void> {
   return new Promise((resolve) => {
     const child = spawn('sh', ['-c', cmd], {
+      cwd: TOWN_ROOT,
       env: { ...process.env, HOME: process.env.HOME ?? '/root' },
       stdio: ['pipe', 'ignore', 'ignore'],
     });
@@ -273,7 +278,10 @@ export class TelegramDriver implements CommsDriver {
       // Send durable mail to mayor (persisted to inbox, survives session restarts)
       const mailBody = `📱 Telegram message\n\nFrom: ${name} (id: ${userId})\n\n${text}\n\n---\nReply: comms send --user ${name} "your reply here"`;
       runWithStdin(`gt mail send mayor/ --subject "COMMS: ${name.replace(/"/g, '')}: ${text.slice(0, 60).replace(/"/g, '')}" --type task --priority 1 --stdin`, mailBody).catch(() => {});
-      run(`gt nudge --mode=immediate mayor/ "📱 New message from ${name}: ${text.slice(0, 40)}"`).catch(() => {});
+      // Nudge co-witness (always idle) so response is immediate even when mayor is mid-conversation.
+      // co-witness forwards to mayor if action is needed; mayor also has it in mail.
+      run(`gt nudge --mode=immediate co-witness "📱 Telegram message from ${name}: ${text.slice(0, 60)} — reply via: comms send --user ${name} \\"...\\""`).catch(() => {});
+      run(`gt nudge --mode=queue mayor/ "📱 New Telegram message from ${name} — check mail"`).catch(() => {});
       await replyText(ctx, '✉️ Sent to mayor. Reply will appear here.');
     });
 
