@@ -218,7 +218,7 @@ export class TelegramDriver implements CommsDriver {
       { command: 'help', description: 'Show all commands' },
     ]);
 
-    bot.launch({ dropPendingUpdates: true });
+    bot.launch({ dropPendingUpdates: false });
 
     console.log('🚂 Gas Town comms (telegram) running...');
     console.log(`   Allowed users: ${ALLOWED_IDS.join(', ') || '(none)'}`);
