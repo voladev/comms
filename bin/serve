@@ -3,6 +3,12 @@
 # This script is invoked by `gt up` when the comms rig is operational.
 # It runs `comms serve` which polls Telegram and routes messages to mayor mail.
 
-set -euo pipefail
+set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$SCRIPT_DIR/comms" serve
+
+# Auto-restart loop: if the bot crashes, wait 5s and restart.
+while true; do
+  "$SCRIPT_DIR/comms" serve
+  echo "comms serve exited (code $?), restarting in 5s..." >&2
+  sleep 5
+done
