@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# serve — Start the comms background service (Telegram bot listener).
+# This script is invoked by `gt up` when the comms rig is operational.
+# It runs `comms serve` which polls Telegram and routes messages to mayor mail.
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/comms" serve
