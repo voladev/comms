@@ -156,19 +156,14 @@ async function buildPickSection(): Promise<string | null> {
   if (workers.length === 0) return null;
 
   // In-progress issues (pick-scoped bd)
+  // bd list doesn't support --json; parse text to get IDs then bd show for full details
   let inProgress: BdIssue[] = [];
   try {
-    const raw = await run('bd list --status in_progress --json 2>/dev/null', PICK_ROOT);
-    const parsed = JSON.parse(raw);
-    inProgress = (Array.isArray(parsed) ? parsed : (parsed.issues ?? [])).filter(
-      (i: BdIssue) => !NOISE_IDS.test(i.id),
-    );
-    // Fetch full details for assignee + description
-    inProgress = await Promise.all(
-      inProgress.map(async (i) =>
-        i.assignee != null ? i : (await fetchIssue(i.id, PICK_ROOT)) ?? i,
-      ),
-    );
+    const text = await run('bd list --status in_progress 2>/dev/null', PICK_ROOT);
+    const ids = [...text.matchAll(/\b(pi-[a-z0-9]+)\b/g)].map((m) => m[1]);
+    inProgress = (
+      await Promise.all(ids.map((id) => fetchIssue(id, PICK_ROOT)))
+    ).filter((i): i is BdIssue => i != null && !NOISE_IDS.test(i.id));
   } catch { /* ignore */ }
 
   // Queued issues (pick-scoped bd)
