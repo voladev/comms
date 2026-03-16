@@ -2,7 +2,12 @@ import 'dotenv/config';
 import { Telegraf, Context } from 'telegraf';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { drainOutbox, appendInbox } from '../../store.js';
+import {
+  drainOutbox,
+  appendInbox,
+  readProgressState,
+  writeProgressState,
+} from '../../store.js';
 import type { CommsDriver } from '../interface.js';
 
 const execAsync = promisify(exec);
@@ -112,20 +117,100 @@ interface BdIssue {
   id: string;
   title: string;
   priority: number;
+  status?: string;
+  description?: string;
+  created_by?: string;
+  assignee?: string;
+  closed_at?: string;
 }
 
-async function fetchIssueTitle(id: string): Promise<string | null> {
+/** Fetch a single issue's full details via bd show. */
+async function fetchIssue(id: string): Promise<BdIssue | null> {
   try {
     const out = await run(`bd show ${id} --json 2>/dev/null`);
     const arr = JSON.parse(out) as BdIssue[];
-    return arr[0]?.title ?? null;
+    return arr[0] ?? null;
   } catch {
     return null;
   }
 }
 
+/**
+ * Extract a short human-readable context from a beads issue description.
+ * Prefers the ## Context section; falls back to the first meaningful line.
+ */
+function extractContext(description: string | undefined): string | null {
+  if (!description) return null;
+  const contextMatch = description.match(/##\s*Context\s*\n([\s\S]*?)(?:\n##|\n---|\s*$)/i);
+  if (contextMatch) {
+    const text = contextMatch[1].replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+    if (text.length > 0) return text.length > 140 ? text.slice(0, 140) + '…' : text;
+  }
+  const firstLine = description.split('\n').find(
+    (l) => l.trim().length > 10 && !l.startsWith('#') && !l.startsWith('-') && !l.startsWith('*'),
+  );
+  if (firstLine) {
+    const t = firstLine.trim();
+    return t.length > 140 ? t.slice(0, 140) + '…' : t;
+  }
+  return null;
+}
+
+const NOISE_IDS = /wisp|mol-/;
+
 async function buildProgressReport(): Promise<string> {
-  const lines: string[] = [];
+  const now = new Date().toISOString();
+  const lastState = readProgressState();
+  const lastAt = lastState?.last_progress_at ?? null;
+
+  // Record this call so next /progress can show "done since last check"
+  writeProgressState({ last_progress_at: now });
+
+  const sections: string[] = [];
+
+  // ── Done since last check ──
+  if (lastAt) {
+    let closed: BdIssue[] = [];
+    try {
+      const raw = await run('bd list --status closed --json 2>/dev/null');
+      const parsed = JSON.parse(raw);
+      const all: BdIssue[] = Array.isArray(parsed) ? parsed : (parsed.issues ?? []);
+      closed = all.filter(
+        (i) => !NOISE_IDS.test(i.id) && i.closed_at != null && i.closed_at > lastAt,
+      );
+    } catch { /* ignore */ }
+
+    if (closed.length > 0) {
+      const lines = ['✅ Done since last check:'];
+      for (const issue of closed.slice(0, 5)) {
+        lines.push(`  ✓ ${issue.id} — ${issue.title}`);
+      }
+      if (closed.length > 5) lines.push(`  … and ${closed.length - 5} more`);
+      sections.push(lines.join('\n'));
+    }
+  }
+
+  // ── In progress ──
+  let inProgress: BdIssue[] = [];
+  try {
+    const raw = await run('bd list --status in_progress --json 2>/dev/null');
+    const parsed = JSON.parse(raw);
+    inProgress = (Array.isArray(parsed) ? parsed : (parsed.issues ?? [])).filter(
+      (i: BdIssue) => !NOISE_IDS.test(i.id),
+    );
+  } catch { /* ignore */ }
+
+  if (inProgress.length > 0) {
+    const lines = ['⚙️ In progress:'];
+    for (const issue of inProgress) {
+      // bd list may return summary only — fetch full details for context
+      const full = issue.description != null ? issue : await fetchIssue(issue.id);
+      lines.push(`  ● ${issue.id} P${issue.priority} — ${issue.title}`);
+      const ctx = extractContext(full?.description);
+      if (ctx) lines.push(`    ↳ ${ctx}`);
+    }
+    sections.push(lines.join('\n'));
+  }
 
   // ── Active workers ──
   let polecats: PolecatJson[] = [];
@@ -136,41 +221,52 @@ async function buildProgressReport(): Promise<string> {
   } catch { /* ignore */ }
 
   if (polecats.length > 0) {
-    lines.push('🐱 Active workers:');
+    const lines = ['🐱 Workers:'];
     for (const p of polecats) {
       let label = p.state;
       if (p.issue) {
-        const title = await fetchIssueTitle(p.issue);
-        label = title ? `${p.issue}: ${title}` : p.issue;
+        const issue = await fetchIssue(p.issue);
+        label = issue?.title ? `${p.issue}: ${issue.title}` : p.issue;
       }
       lines.push(`  ● ${p.rig}/${p.name} — ${label}`);
     }
-  } else {
-    lines.push('🐱 No active workers');
+    sections.push(lines.join('\n'));
   }
 
-  // ── Queued (ready) issues ──
+  // ── Planned (ready to pick up) ──
   let ready: BdIssue[] = [];
   try {
     const raw = await run('bd ready --json 2>/dev/null');
     const parsed = JSON.parse(raw);
-    ready = Array.isArray(parsed) ? parsed : (parsed.issues ?? []);
+    ready = (Array.isArray(parsed) ? parsed : (parsed.issues ?? [])).filter(
+      (i: BdIssue) => !NOISE_IDS.test(i.id),
+    );
   } catch { /* ignore */ }
 
-  lines.push('');
   if (ready.length > 0) {
-    lines.push('📋 Queued:');
-    for (const issue of ready.slice(0, 8)) {
+    const lines = ['📋 Planned:'];
+    // Show context for top 4; rest just titles
+    for (let i = 0; i < Math.min(ready.length, 6); i++) {
+      const issue = ready[i];
       lines.push(`  ○ ${issue.id} P${issue.priority} — ${issue.title}`);
+      if (i < 4) {
+        const full = issue.description != null ? issue : await fetchIssue(issue.id);
+        const ctx = extractContext(full?.description);
+        if (ctx) lines.push(`    ↳ ${ctx}`);
+      }
     }
-    if (ready.length > 8) lines.push(`  … and ${ready.length - 8} more`);
-  } else {
-    lines.push('📋 No queued work');
+    if (ready.length > 6) lines.push(`  … and ${ready.length - 6} more`);
+    sections.push(lines.join('\n'));
   }
 
-  lines.push('');
-  lines.push(`_Updated: ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC_`);
-  return lines.join('\n');
+  if (sections.length === 0) sections.push('💤 No active work');
+
+  const since = lastAt
+    ? `last checked: ${lastAt.replace('T', ' ').slice(0, 16)} UTC`
+    : 'first check';
+  sections.push(`_${now.replace('T', ' ').slice(0, 16)} UTC · ${since}_`);
+
+  return sections.join('\n\n');
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────

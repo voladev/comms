@@ -81,3 +81,22 @@ export function readProgressCache(): ProgressCache | null {
     return null;
   }
 }
+
+export const PROGRESS_STATE_FILE = resolve(DATA_DIR, 'progress-state.json');
+
+export interface ProgressState {
+  last_progress_at: string; // ISO timestamp of last /progress command call
+}
+
+export function readProgressState(): ProgressState | null {
+  if (!existsSync(PROGRESS_STATE_FILE)) return null;
+  try {
+    return JSON.parse(readFileSync(PROGRESS_STATE_FILE, 'utf8')) as ProgressState;
+  } catch {
+    return null;
+  }
+}
+
+export function writeProgressState(state: ProgressState): void {
+  writeFileSync(PROGRESS_STATE_FILE, JSON.stringify(state));
+}
