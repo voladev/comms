@@ -125,14 +125,86 @@ interface BdIssue {
 }
 
 /** Fetch a single issue's full details via bd show. */
-async function fetchIssue(id: string): Promise<BdIssue | null> {
+async function fetchIssue(id: string, cwd?: string): Promise<BdIssue | null> {
   try {
-    const out = await run(`bd show ${id} --json 2>/dev/null`);
+    const out = await run(`bd show ${id} --json 2>/dev/null`, cwd);
     const arr = JSON.parse(out) as BdIssue[];
     return arr[0] ?? null;
   } catch {
     return null;
   }
+}
+
+interface CrewWorker {
+  name: string;
+  rig: string;
+  branch: string;
+  has_session: boolean;
+}
+
+/** Build the Pick crew section using pick-scoped bd and gt crew commands. */
+async function buildPickSection(): Promise<string | null> {
+  const PICK_ROOT = `${TOWN_ROOT}/pick`;
+
+  // Crew workers
+  let workers: CrewWorker[] = [];
+  try {
+    const raw = await run('gt crew list --rig pick --json 2>/dev/null');
+    const parsed = JSON.parse(raw);
+    workers = (Array.isArray(parsed) ? parsed : []).filter((w: CrewWorker) => w.has_session);
+  } catch { /* ignore */ }
+  if (workers.length === 0) return null;
+
+  // In-progress issues (pick-scoped bd)
+  let inProgress: BdIssue[] = [];
+  try {
+    const raw = await run('bd list --status in_progress --json 2>/dev/null', PICK_ROOT);
+    const parsed = JSON.parse(raw);
+    inProgress = (Array.isArray(parsed) ? parsed : (parsed.issues ?? [])).filter(
+      (i: BdIssue) => !NOISE_IDS.test(i.id),
+    );
+    // Fetch full details for assignee + description
+    inProgress = await Promise.all(
+      inProgress.map(async (i) =>
+        i.assignee != null ? i : (await fetchIssue(i.id, PICK_ROOT)) ?? i,
+      ),
+    );
+  } catch { /* ignore */ }
+
+  // Queued issues (pick-scoped bd)
+  let queued: BdIssue[] = [];
+  try {
+    const raw = await run('bd ready --json 2>/dev/null', PICK_ROOT);
+    const parsed = JSON.parse(raw);
+    queued = (Array.isArray(parsed) ? parsed : (parsed.issues ?? [])).filter(
+      (i: BdIssue) => !NOISE_IDS.test(i.id),
+    );
+  } catch { /* ignore */ }
+
+  const lines: string[] = ['🎬 Pick crew (ratedby.dev):'];
+
+  for (const worker of workers) {
+    const assigneePath = `pick/crew/${worker.name}`;
+    const issue = inProgress.find((i) => i.assignee === assigneePath);
+    if (issue) {
+      lines.push(`  ● ${worker.name} — ${issue.id}: ${issue.title}`);
+      const ctx = extractContext(issue.description);
+      if (ctx) lines.push(`    ↳ ${ctx}`);
+    } else {
+      const branchHint = worker.branch && worker.branch !== 'main' ? ` (${worker.branch})` : '';
+      lines.push(`  ○ ${worker.name} — idle${branchHint}`);
+    }
+  }
+
+  if (queued.length > 0) {
+    lines.push('  📋 Queued:');
+    for (const issue of queued.slice(0, 4)) {
+      lines.push(`    ○ ${issue.id} P${issue.priority} — ${issue.title}`);
+    }
+    if (queued.length > 4) lines.push(`    … and ${queued.length - 4} more`);
+  }
+
+  return lines.join('\n');
 }
 
 /**
@@ -258,6 +330,10 @@ async function buildProgressReport(): Promise<string> {
     if (ready.length > 6) lines.push(`  … and ${ready.length - 6} more`);
     sections.push(lines.join('\n'));
   }
+
+  // ── Pick crew ──
+  const pickSection = await buildPickSection();
+  if (pickSection) sections.push(pickSection);
 
   if (sections.length === 0) sections.push('💤 No active work');
 
